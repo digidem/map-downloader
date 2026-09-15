@@ -23,7 +23,7 @@ npm test
 ## Deployment
 
 ```bash
-npm run deploy   # build + deploy to Cloudflare Pages
+npm run deploy   # build + deploy to Cloudflare Workers (static assets)
 ```
 
 Or run `npm run build` and upload the `dist` directory to a host that sets the cross-origin isolation headers in `public/_headers`.

@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 
-// Mirror of the Cloudflare Pages `_headers` rules for vite preview so a
+// Mirror of the Cloudflare `_headers` rules for vite preview so a
 // freshly-built sw.js bypasses the browser's 24-hour update rule.
 const noCacheForServiceWorker = {
   name: "no-cache-for-sw",
