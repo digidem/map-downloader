@@ -12,24 +12,24 @@
     "test:e2e:install": "npx playwright install chromium firefox"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.1.16",
-    "@types/node": "^25.5.0",
-    "@vitejs/plugin-basic-ssl": "^2.1.0",
-    "playwright": "^1.58.2",
-    "postcss": "^8.5.6",
-    "tailwindcss": "^4.1.16",
-    "typescript": "^5.9.3",
-    "vite": "^7.1.12",
-    "vitest": "^4.1.0",
-    "wrangler": "^4.45.4"
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.5.1",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "playwright": "^1.63.0",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0",
+    "wrangler": "^4.131.2"
   },
   "dependencies": {
     "filter-obj": "^6.1.0",
     "lit": "^3.3.3",
-    "maplibre-gl": "^5.11.0",
-    "mbtiles-reader": "^2.0.1",
+    "maplibre-gl": "^6.9.0",
+    "mbtiles-reader": "^2.0.2",
     "p-defer": "^4.0.1",
-    "p-event": "^7.0.0",
-    "styled-map-package-api": "^5.0.0-pre.3"
+    "p-event": "^7.1.0",
+    "styled-map-package-api": "^6.0.1"
   }
 }

@@ -213,14 +213,14 @@ export function syncOverlaysToMap(
           (def as { layout?: Record<string, unknown> }).layout ?? {};
         for (const [k, v] of Object.entries(paint)) {
           try {
-            map.setPaintProperty(def.id, k, v);
+            map.setPaintProperty(def.id, k as never, v as never);
           } catch {
             /* property not applicable after a geometry/shape switch */
           }
         }
         for (const [k, v] of Object.entries(layout)) {
           try {
-            map.setLayoutProperty(def.id, k, v);
+            map.setLayoutProperty(def.id, k as never, v as never);
           } catch {
             /* property not applicable */
           }

@@ -107,7 +107,7 @@ async function streamFromUrl(
     styleUrl,
     bbox,
     maxzoom: maxZoom,
-    accessToken,
+    mapboxAccessToken: accessToken,
     onprogress: (p) => {
       const totalTiles = Math.max(1, p.tiles.total || 0);
       const fraction = Math.min(

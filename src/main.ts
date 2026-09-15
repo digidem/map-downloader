@@ -1,6 +1,12 @@
 import "maplibre-gl/dist/maplibre-gl.css";
 import pDefer, { type DeferredPromise } from "p-defer";
-import maplibregl, { type StyleSpecification } from "maplibre-gl";
+import {
+  addProtocol,
+  setWorkerUrl,
+  type StyleSpecification,
+} from "maplibre-gl";
+// `?worker&url`, not `?url`: the worker imports a sibling shared chunk that `?url` doesn't emit.
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 
 import {
   PRESET_STYLES,
@@ -39,7 +45,8 @@ if ("serviceWorker" in navigator) {
 const worker = new Worker(new URL("./worker.ts", import.meta.url), {
   type: "module",
 });
-maplibregl.addProtocol("mbtiles", createProtocolHandler(getTileFromWorker));
+setWorkerUrl(maplibreWorkerUrl);
+addProtocol("mbtiles", createProtocolHandler(getTileFromWorker));
 
 // ── Worker tile request plumbing (for the mbtiles:// protocol) ────────────
 const pendingTileRequests = new Map<number, DeferredPromise<ArrayBuffer>>();

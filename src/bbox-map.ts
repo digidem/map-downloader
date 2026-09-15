@@ -1,4 +1,4 @@
-import maplibregl, {
+import {
   Map as MaplibreMap,
   type LngLatBoundsLike,
   type StyleSpecification,
@@ -131,7 +131,7 @@ export class BboxMap {
       }
     }
 
-    this.map = new maplibregl.Map({
+    this.map = new MaplibreMap({
       container: this.mapEl,
       style: buildMapStyle(this.currentStyle) as
         | string
