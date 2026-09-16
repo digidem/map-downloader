@@ -843,7 +843,7 @@ export class DownloadModal extends LightElement {
     backdrop.className = "dm-huge-backdrop";
     backdrop.addEventListener("click", (e) => {
       if (e.target !== backdrop) return;
-      track("huge_download_confirm", { outcome: "cancelled" });
+      track("huge_download_prompt", { outcome: "cancelled" });
       this.closeHugeConfirm();
     });
 
@@ -885,14 +885,14 @@ export class DownloadModal extends LightElement {
     input.addEventListener("input", sync);
     confirmBtn.addEventListener("click", () => {
       if (input.value.trim() !== expected) return;
-      track("huge_download_confirm", { outcome: "confirmed" });
+      track("huge_download_prompt", { outcome: "confirmed" });
       this.closeHugeConfirm();
       this.startDownload();
     });
     modal
       .querySelector<HTMLButtonElement>(".dm-huge-cancel")!
       .addEventListener("click", () => {
-        track("huge_download_confirm", { outcome: "cancelled" });
+        track("huge_download_prompt", { outcome: "cancelled" });
         this.closeHugeConfirm();
       });
 

@@ -13,7 +13,7 @@ export type AnalyticsEvent =
   | "info_panel_open"
   | "overlay_add"
   | "download_dialog_open"
-  | "huge_download_confirm"
+  | "huge_download_prompt"
   | "download_start"
   | "download_complete"
   | "download_fail";
@@ -27,9 +27,6 @@ const CAMPAIGN_PARAMS = [
   "utm_campaign",
   "utm_content",
   "utm_term",
-  "gclid",
-  "fbclid",
-  "msclkid",
 ];
 // Keeps dev, e2e, PR-preview and automated traffic out of PostHog.
 const POSTHOG_ENABLED =
@@ -113,29 +110,50 @@ function campaignProps(): Props {
   return props;
 }
 
+let pageviewAt = 0;
+let pageleaveSent = false;
+
+function sendPageview() {
+  pageviewAt = Date.now();
+  pageleaveSent = false;
+  sendToPostHog("$pageview", campaignProps());
+}
+
+// Without a $pageleave, a visit with no other events has zero duration and
+// counts as a bounce. Mobile browsers often skip `pagehide` when a
+// backgrounded tab is killed, so a hidden page counts as leaving too.
+function sendPageleave() {
+  if (pageleaveSent) return;
+  pageleaveSent = true;
+  sendToPostHog("$pageleave", {
+    $prev_pageview_pathname: location.pathname,
+    $prev_pageview_duration: (Date.now() - pageviewAt) / 1000,
+  });
+}
+
+function safely(fn: () => void) {
+  return () => {
+    try {
+      fn();
+    } catch {
+      // Analytics must never break the app.
+    }
+  };
+}
+
 export function initAnalytics() {
-  try {
-    const loadedAt = Date.now();
-    sendToPostHog("$pageview", campaignProps());
-    // Without a $pageleave, a visit with no other events has zero duration
-    // and counts as a bounce.
-    addEventListener(
-      "pagehide",
-      () => {
-        try {
-          sendToPostHog("$pageleave", {
-            $prev_pageview_pathname: location.pathname,
-            $prev_pageview_duration: (Date.now() - loadedAt) / 1000,
-          });
-        } catch {
-          // Analytics must never break the app.
-        }
-      },
-      { once: true },
-    );
-  } catch {
-    // Analytics must never break the app.
-  }
+  safely(sendPageview)();
+  window.addEventListener("pagehide", safely(sendPageleave));
+  document.addEventListener(
+    "visibilitychange",
+    safely(() => {
+      if (document.visibilityState === "hidden") sendPageleave();
+    }),
+  );
+  // A page restored from the back/forward cache is a new visit.
+  window.addEventListener("pageshow", (e) => {
+    if (e.persisted) safely(sendPageview)();
+  });
 }
 
 export function track(event: AnalyticsEvent, props: Props = {}) {
