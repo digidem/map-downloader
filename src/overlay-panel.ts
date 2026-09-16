@@ -3,7 +3,7 @@ import { classMap } from "lit/directives/class-map.js";
 import type { Map as MaplibreMap } from "maplibre-gl";
 import type { FeatureCollection } from "geojson";
 import { LightElement } from "./lit-base.ts";
-import { featureBucket, sanitizeError, track } from "./analytics.ts";
+import { sanitizeError, track } from "./analytics.ts";
 import {
   buildLayerStyle,
   filterByGeomType,
@@ -152,19 +152,18 @@ export class OverlayPanel extends LightElement {
         const created = this.fanOut(file.name, fc);
         if (!firstNewId && created[0]) firstNewId = created[0].id;
         next = [...created, ...next];
-        track("Overlay Added", {
+        track("overlay_add", {
           result: "ok",
           via,
-          geometry: created.map((l) => l.geomType).join(",") || "empty",
-          features: featureBucket(fc.features.length),
+          geometry_types: created.map((l) => l.geomType).join(",") || "empty",
           feature_count: fc.features.length,
         });
       } catch (err) {
         errors.push((err as Error).message);
-        track("Overlay Added", {
+        track("overlay_add", {
           result: "error",
           via,
-          error: sanitizeError((err as Error).message),
+          error_message: sanitizeError((err as Error).message),
         });
       }
     }
