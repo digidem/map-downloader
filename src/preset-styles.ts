@@ -1,4 +1,9 @@
 import type { StyleSpecification } from "maplibre-gl";
+import {
+  MAPBOX_ATTRIBUTION,
+  MAPBOX_TERMS_URL,
+  parseMapboxStyleUrl,
+} from "./mapbox.ts";
 
 export type StyleKind = "vector" | "raster";
 export type StyleTone = "light" | "dark";
@@ -166,6 +171,8 @@ export interface CustomStyle {
   /** Absent for custom URLs — `getRestrictions` falls back to UNKNOWN_RESTRICTIONS. */
   restrictions?: UsageRestrictions;
   termsUrl?: string;
+  /** Who publishes the tiles — named in the download terms acknowledgement. */
+  provider?: string;
 }
 
 export interface MbtilesStyle {
@@ -214,6 +221,35 @@ export type AppStyle = PresetStyle | CustomStyle | MbtilesStyle | QmsStyle;
 /** Safe fallback attribution for a user-pasted custom URL. */
 export const CUSTOM_URL_ATTRIBUTION =
   "Custom user-provided source — verify licence with the provider.";
+
+/** Readable host for a user-pasted URL, e.g. `tile.openstreetmap.org` for
+ *  `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`. */
+export function sourceHost(url: string): string {
+  if (parseMapboxStyleUrl(url)) return "mapbox.com";
+  const m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?([^/?#:]+)/i.exec(url);
+  if (!m) return url;
+  return m[1].toLowerCase().replace(/^(?:\{[^}]*\}\.|www\.)/, "");
+}
+
+/** Provider, attribution and terms for a user-pasted URL. `attribution` is
+ *  the source's own (already sanitised) credits, when it published any. Only
+ *  Mapbox has known terms; anything else is named by its host. */
+export function customSourceInfo(
+  url: string,
+  attribution?: string,
+): Pick<CustomStyle, "provider" | "attribution" | "termsUrl"> {
+  if (parseMapboxStyleUrl(url)) {
+    return {
+      provider: "Mapbox",
+      attribution: attribution ?? MAPBOX_ATTRIBUTION,
+      termsUrl: MAPBOX_TERMS_URL,
+    };
+  }
+  return {
+    provider: sourceHost(url),
+    attribution: attribution ?? CUSTOM_URL_ATTRIBUTION,
+  };
+}
 
 /** Usage restrictions for sources we can't vouch for — custom URLs, QMS
  *  catalogue entries, and loaded .mbtiles files. */

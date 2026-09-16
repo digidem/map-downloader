@@ -3,6 +3,7 @@ import {
   type LngLatBoundsLike,
   type StyleSpecification,
 } from "maplibre-gl";
+import { isMapboxUrl, normalizeMapboxUrl } from "./mapbox.ts";
 import { buildMapStyle, type AppStyle } from "./preset-styles.ts";
 
 export interface GeoBbox {
@@ -142,6 +143,12 @@ export class BboxMap {
       maxZoom: 18,
       dragRotate: false,
       pitchWithRotate: false,
+      transformRequest: (url) => {
+        if (!isMapboxUrl(url)) return { url };
+        const style = this.currentStyle;
+        const token = "accessToken" in style ? style.accessToken : undefined;
+        return { url: normalizeMapboxUrl(url, token) };
+      },
     });
 
     if (this.opts.lockZoom) {

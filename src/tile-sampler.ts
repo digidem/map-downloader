@@ -9,6 +9,7 @@ import {
   lngLatToTile,
   type AppStyle,
 } from "./preset-styles.ts";
+import { normalizeMapboxUrl } from "./mapbox.ts";
 
 /** Highest zoom we'll probe to. Most public tile providers stop at 19–20. */
 const PROBE_MAX_ZOOM = 22;
@@ -41,10 +42,12 @@ export async function resolveDataTileUrls(
   signal?: AbortSignal,
 ): Promise<string[]> {
   if ("isMbtiles" in style && style.isMbtiles) return [];
+  const token = "accessToken" in style ? style.accessToken : undefined;
 
   if ("spec" in style && style.spec) {
     return collectTileUrlsFromSpec(
       style.spec as unknown as MaplibreStyleish,
+      token,
       signal,
     );
   }
@@ -53,11 +56,11 @@ export async function resolveDataTileUrls(
 
   // The url is either a maplibre style.json or a TileJSON.
   try {
-    const r = await fetch(style.url, { signal });
+    const r = await fetch(normalizeMapboxUrl(style.url, token), { signal });
     if (!r.ok) return [];
     const json = (await r.json()) as MaplibreStyleish & TileJsonish;
     if (json.version === 8 && json.sources) {
-      return collectTileUrlsFromSpec(json, signal);
+      return collectTileUrlsFromSpec(json, token, signal);
     }
     if (Array.isArray(json.tiles) && json.tiles.length) return json.tiles;
   } catch {
@@ -68,6 +71,7 @@ export async function resolveDataTileUrls(
 
 async function collectTileUrlsFromSpec(
   spec: MaplibreStyleish,
+  token: string | undefined,
   signal?: AbortSignal,
 ): Promise<string[]> {
   const out: string[] = [];
@@ -83,7 +87,8 @@ async function collectTileUrlsFromSpec(
       out.push(src.tiles[0]);
     } else if (src.url) {
       try {
-        const tj = (await fetch(src.url, { signal }).then((r) =>
+        const tjUrl = normalizeMapboxUrl(src.url, token);
+        const tj = (await fetch(tjUrl, { signal }).then((r) =>
           r.json(),
         )) as TileJsonish;
         if (Array.isArray(tj.tiles) && tj.tiles.length) {
@@ -175,6 +180,7 @@ export async function getStyleMaxZoomAsync(
 
   // mbtiles without metadata.maxzoom — fallback to probing the bbox.
   if ("isMbtiles" in style && style.isMbtiles) return null;
+  const token = "accessToken" in style ? style.accessToken : undefined;
 
   // Resolve the underlying tile URLs first; for tile URL templates that's the
   // template itself, for style URLs we walk style.json -> TileJSON.
@@ -183,11 +189,11 @@ export async function getStyleMaxZoomAsync(
   // Try each source's TileJSON / spec entry for a stated maxzoom.
   if (!isTileUrlTemplate(style.url) && !("spec" in style && style.spec)) {
     try {
-      const r = await fetch(style.url, { signal });
+      const r = await fetch(normalizeMapboxUrl(style.url, token), { signal });
       if (r.ok) {
         const json = (await r.json()) as MaplibreStyleish & TileJsonish;
         if (json.version === 8 && json.sources) {
-          const m = await maxZoomFromSpecAsync(json, signal);
+          const m = await maxZoomFromSpecAsync(json, token, signal);
           if (m != null) return m;
         }
         if (typeof json.maxzoom === "number") return json.maxzoom;
@@ -279,6 +285,7 @@ function maxZoomFromSpec(spec: MaplibreStyleish): number | null {
  *  the URL and read its maxzoom. Returns the largest maxzoom across sources. */
 async function maxZoomFromSpecAsync(
   spec: MaplibreStyleish,
+  token: string | undefined,
   signal?: AbortSignal,
 ): Promise<number | null> {
   let max: number | null = null;
@@ -288,7 +295,8 @@ async function maxZoomFromSpecAsync(
       candidate = src.maxzoom;
     } else if (src.url) {
       try {
-        const tj = (await fetch(src.url, { signal }).then((r) =>
+        const tjUrl = normalizeMapboxUrl(src.url, token);
+        const tj = (await fetch(tjUrl, { signal }).then((r) =>
           r.json(),
         )) as TileJsonish;
         if (typeof tj.maxzoom === "number") candidate = tj.maxzoom;

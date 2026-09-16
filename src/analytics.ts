@@ -1,4 +1,5 @@
 import type { GeoBbox } from "./bbox-map.ts";
+import { isMapboxUrl, parseMapboxStyleUrl } from "./mapbox.ts";
 import { isTileUrlTemplate, type AppStyle } from "./preset-styles.ts";
 
 type Props = Record<string, string | number | boolean>;
@@ -185,6 +186,7 @@ export function regionCell(b: GeoBbox): string {
 
 /** Host only — full custom URLs can carry API keys in the path or query. */
 export function urlHost(url: string): string {
+  if (isMapboxUrl(url)) return "api.mapbox.com";
   const m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?([^/?#:]+)/i.exec(url);
   return m ? m[1].toLowerCase() : "unknown";
 }
@@ -196,6 +198,7 @@ export function sanitizeError(msg: string): string {
 
 export function customUrlType(url: string, hasSpec: boolean): string {
   if (isTileUrlTemplate(url)) return "tile-url";
+  if (parseMapboxStyleUrl(url)) return "mapbox-style";
   return hasSpec ? "tilejson" : "style-json";
 }
 

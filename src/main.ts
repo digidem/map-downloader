@@ -10,7 +10,6 @@ import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 
 import {
   PRESET_STYLES,
-  CUSTOM_URL_ATTRIBUTION,
   isTileUrlTemplate,
   rasterStyleForTileUrl,
   type AppStyle,
@@ -33,6 +32,7 @@ import {
 } from "./analytics.ts";
 import {
   loadRecents,
+  customStyleFromRecent,
   loadSelected,
   recentIdForUrl,
   saveSelected,
@@ -106,20 +106,7 @@ function initialStyle(): AppStyle {
   }
   if (ref?.kind === "recent") {
     const recent = loadRecents().find((r) => r.id === ref.id);
-    if (recent) {
-      return {
-        id: "custom",
-        name: recent.name,
-        desc: recent.url,
-        url: recent.url,
-        kind: recent.kind,
-        spec: recent.spec,
-        accessToken: recent.accessToken,
-        maxZoom: recent.maxZoom,
-        license: "restrictive",
-        attribution: CUSTOM_URL_ATTRIBUTION,
-      };
-    }
+    if (recent) return customStyleFromRecent(recent);
   }
   return PRESET_STYLES[0];
 }
