@@ -41,6 +41,7 @@ import {
 import { customUrlType, sanitizeError, track, urlHost } from "./analytics.ts";
 import { combineAttributions } from "./attribution.ts";
 import {
+  mapboxAccessToken,
   mapboxStyleUri,
   normalizeMapboxUrl,
   parseMapboxStyleUrl,
@@ -844,10 +845,12 @@ export class StylePicker extends LightElement {
 
     try {
       const mapboxStyle = parseMapboxStyleUrl(this.customUrl);
-      const mapboxToken = mapboxStyle
+      const accessToken = mapboxStyle
         ? (mapboxStyle.accessToken ?? this.token.trim())
-        : undefined;
-      if (mapboxToken?.startsWith("sk.")) {
+        : tokenInfo.required
+          ? this.token
+          : undefined;
+      if (mapboxStyle && accessToken?.startsWith("sk.")) {
         throw new Error(
           "Use a public Mapbox token (pk.…), not a secret token (sk.…)",
         );
@@ -868,11 +871,6 @@ export class StylePicker extends LightElement {
         ? this.scheme
         : undefined;
 
-      const accessToken = mapboxStyle
-        ? mapboxToken
-        : tokenInfo.required
-          ? this.token
-          : undefined;
       const resolved = await resolveCustomStyle(
         finalUrl,
         subdomains,
@@ -1014,7 +1012,7 @@ interface ResolvedCustom {
  *  source's TileJSON. Sources that fail to load are skipped. */
 async function styleSourceAttributions(
   sources: Record<string, unknown>,
-  accessToken?: string,
+  mapboxToken?: string,
 ): Promise<string[]> {
   const found = await Promise.all(
     Object.values(sources).map(async (value) => {
@@ -1022,7 +1020,9 @@ async function styleSourceAttributions(
       if (typeof src.attribution === "string") return src.attribution;
       if (typeof src.url !== "string") return "";
       try {
-        const r = await fetch(normalizeMapboxUrl(src.url, accessToken));
+        const r = await fetch(normalizeMapboxUrl(src.url, mapboxToken), {
+          signal: AbortSignal.timeout(5000),
+        });
         if (!r.ok) return "";
         const tj = (await r.json()) as { attribution?: unknown };
         return typeof tj.attribution === "string" ? tj.attribution : "";
@@ -1069,7 +1069,8 @@ async function resolveCustomStyle(
     };
   }
   const isMapbox = !!parseMapboxStyleUrl(url);
-  const r = await fetch(normalizeMapboxUrl(url, accessToken));
+  const mapboxToken = mapboxAccessToken({ url, accessToken });
+  const r = await fetch(normalizeMapboxUrl(url, mapboxToken));
   if (isMapbox && (r.status === 401 || r.status === 403)) {
     throw new Error(`Mapbox rejected the access token (${r.status})`);
   }
@@ -1086,7 +1087,7 @@ async function resolveCustomStyle(
     const sourceAttribution = combineAttributions(
       await styleSourceAttributions(
         json.sources as Record<string, unknown>,
-        accessToken,
+        mapboxToken,
       ),
     );
     return {

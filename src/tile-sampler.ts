@@ -9,7 +9,7 @@ import {
   lngLatToTile,
   type AppStyle,
 } from "./preset-styles.ts";
-import { normalizeMapboxUrl } from "./mapbox.ts";
+import { mapboxAccessToken, normalizeMapboxUrl } from "./mapbox.ts";
 
 /** Highest zoom we'll probe to. Most public tile providers stop at 19–20. */
 const PROBE_MAX_ZOOM = 22;
@@ -42,7 +42,7 @@ export async function resolveDataTileUrls(
   signal?: AbortSignal,
 ): Promise<string[]> {
   if ("isMbtiles" in style && style.isMbtiles) return [];
-  const token = "accessToken" in style ? style.accessToken : undefined;
+  const token = mapboxAccessToken(style);
 
   if ("spec" in style && style.spec) {
     return collectTileUrlsFromSpec(
@@ -180,7 +180,7 @@ export async function getStyleMaxZoomAsync(
 
   // mbtiles without metadata.maxzoom — fallback to probing the bbox.
   if ("isMbtiles" in style && style.isMbtiles) return null;
-  const token = "accessToken" in style ? style.accessToken : undefined;
+  const token = mapboxAccessToken(style);
 
   // Resolve the underlying tile URLs first; for tile URL templates that's the
   // template itself, for style URLs we walk style.json -> TileJSON.

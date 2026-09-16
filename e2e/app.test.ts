@@ -329,16 +329,18 @@ function appTests(
         expect(requested).toContain(
           `https://${styleBase}?access_token=${token}`,
         );
-        // MapLibre resolves the style's mapbox:// source through the API.
+        // The picker (for attribution) and MapLibre each resolve the style's
+        // mapbox:// source through the API.
         await expect
-          .poll(() =>
-            requested.some(
-              (u) =>
-                u.includes("/v4/test.tiles.json") &&
-                u.includes(`access_token=${token}`),
-            ),
+          .poll(
+            () =>
+              requested.filter(
+                (u) =>
+                  u.includes("/v4/test.tiles.json") &&
+                  u.includes(`access_token=${token}`),
+              ).length,
           )
-          .toBe(true);
+          .toBeGreaterThanOrEqual(2);
       }
 
       // The acknowledgement names Mapbox and links to its terms, not the URL.
@@ -369,6 +371,8 @@ function appTests(
         '<a href="https://example.com/data" target="_blank" rel="noopener noreferrer">© Data</a> © Imagery',
       );
     } finally {
+      // Later tests would otherwise restore this style and hit the real API.
+      await page.evaluate(() => localStorage.clear());
       await page.unroute("https://api.mapbox.com/**");
     }
   });

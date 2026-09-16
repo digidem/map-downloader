@@ -2,7 +2,8 @@ import type { StyleSpecification } from "maplibre-gl";
 import {
   MAPBOX_ATTRIBUTION,
   MAPBOX_TERMS_URL,
-  parseMapboxStyleUrl,
+  isMapboxUrl,
+  isMapboxServiceUrl,
 } from "./mapbox.ts";
 
 export type StyleKind = "vector" | "raster";
@@ -225,7 +226,7 @@ export const CUSTOM_URL_ATTRIBUTION =
 /** Readable host for a user-pasted URL, e.g. `tile.openstreetmap.org` for
  *  `https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png`. */
 export function sourceHost(url: string): string {
-  if (parseMapboxStyleUrl(url)) return "mapbox.com";
+  if (isMapboxUrl(url)) return "mapbox.com";
   const m = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/?#]*@)?([^/?#:]+)/i.exec(url);
   if (!m) return url;
   return m[1].toLowerCase().replace(/^(?:\{[^}]*\}\.|www\.)/, "");
@@ -238,7 +239,7 @@ export function customSourceInfo(
   url: string,
   attribution?: string,
 ): Pick<CustomStyle, "provider" | "attribution" | "termsUrl"> {
-  if (parseMapboxStyleUrl(url)) {
+  if (isMapboxServiceUrl(url)) {
     return {
       provider: "Mapbox",
       attribution: attribution ?? MAPBOX_ATTRIBUTION,

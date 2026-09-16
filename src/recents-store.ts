@@ -1,5 +1,5 @@
 import { combineAttributions } from "./attribution.ts";
-import { parseMapboxStyleUrl } from "./mapbox.ts";
+import { mapboxStyleUri, parseMapboxStyleUrl } from "./mapbox.ts";
 import {
   customSourceInfo,
   sourceHost,
@@ -47,13 +47,33 @@ export function loadRecents(): RecentEntry[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (e): e is RecentEntry =>
-        e && typeof e.id === "string" && typeof e.url === "string",
-    );
+    const seen = new Set<string>();
+    return parsed
+      .filter(
+        (e): e is RecentEntry =>
+          e && typeof e.id === "string" && typeof e.url === "string",
+      )
+      .map(migrateMapboxEntry)
+      .filter((e) => !seen.has(e.id) && !!seen.add(e.id));
   } catch {
     return [];
   }
+}
+
+/** Entries saved before Mapbox links were parsed hold an api.mapbox.com URL,
+ *  sometimes with the token in it; the app now needs mapbox:// + a token. */
+function migrateMapboxEntry(e: RecentEntry): RecentEntry {
+  const ref = parseMapboxStyleUrl(e.url);
+  if (!ref) return e;
+  const url = mapboxStyleUri(ref);
+  if (url === e.url) return e;
+  return {
+    ...e,
+    id: recentIdForUrl(url),
+    url,
+    name: e.name === e.url ? url : e.name,
+    accessToken: e.accessToken ?? ref.accessToken,
+  };
 }
 
 export function saveRecent(entry: RecentEntry) {
