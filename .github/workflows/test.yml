@@ -31,15 +31,15 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ steps.playwright-version.outputs.PLAYWRIGHT_VERSION }}
+          key: playwright-chromium-webkit-${{ steps.playwright-version.outputs.PLAYWRIGHT_VERSION }}
 
-      - name: Install Playwright Chromium
+      - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit
 
       - name: Install Playwright dependencies
         if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
+        run: npx playwright install-deps chromium webkit
 
       - name: Typecheck
         run: npm run typecheck

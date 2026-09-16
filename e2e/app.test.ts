@@ -1,9 +1,12 @@
+import fs from "fs";
+import os from "os";
 import path from "path";
 import {
   chromium,
   firefox,
   webkit,
   type Browser,
+  type BrowserContext,
   type BrowserType,
   type Page,
 } from "playwright";
@@ -41,6 +44,16 @@ async function loadMbtilesFixture(page: Page) {
   );
 }
 
+/** The download action stays disabled until a service worker controls the page.
+ *  Playwright's Firefox drops the controller on navigation, so tests that are
+ *  not about that gate set the flag themselves. */
+async function markDownloadReady(page: Page) {
+  await page.evaluate(() => {
+    const modal = document.querySelector("download-modal") as any;
+    if (modal) modal.downloadReady = true;
+  });
+}
+
 /** Wait until the map has produced a bbox (bounds summary stops showing "—"),
  *  which means the download flow has a region to work with. */
 async function waitForMapReady(page: Page) {
@@ -53,18 +66,38 @@ async function waitForMapReady(page: Page) {
 function appTests(
   browserType: BrowserType,
   launchOptions?: Record<string, unknown>,
-  opts?: { skipDownloadTest?: boolean },
+  opts?: {
+    skipDownloadTest?: boolean;
+    skipMbtilesTests?: boolean;
+    skipRouteMocks?: boolean;
+    persistent?: boolean;
+  },
 ) {
-  let browser: Browser;
+  let browser: Browser | undefined;
+  let context: BrowserContext | undefined;
+  let userDataDir: string | undefined;
   let page: Page;
 
   beforeAll(async () => {
-    browser = await browserType.launch({ headless: true, ...launchOptions });
-    page = await browser.newPage();
+    if (opts?.persistent) {
+      // WebKit's ephemeral contexts have no OPFS, which the mbtiles path needs.
+      userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "map-downloader-"));
+      context = await browserType.launchPersistentContext(userDataDir, {
+        headless: true,
+        acceptDownloads: true,
+        ...launchOptions,
+      });
+      page = context.pages()[0] ?? (await context.newPage());
+    } else {
+      browser = await browserType.launch({ headless: true, ...launchOptions });
+      page = await browser.newPage();
+    }
   });
 
   afterAll(async () => {
+    await context?.close();
     await browser?.close();
+    if (userDataDir) fs.rmSync(userDataDir, { recursive: true, force: true });
   });
 
   test("renders the map downloader UI on load", async () => {
@@ -145,6 +178,7 @@ function appTests(
       .click();
     await page.locator(".sp-backdrop").waitFor({ state: "hidden" });
 
+    await markDownloadReady(page);
     await page.locator("#download-button").click();
     await page.locator(".dm-primary").waitFor({ state: "visible" });
     // Restrictive licence ⇒ banner shown, primary disabled until acknowledged.
@@ -170,6 +204,7 @@ function appTests(
     await page.evaluate(() => (window as any).maplibreMap?.setZoom(1));
     await page.waitForTimeout(600);
 
+    await markDownloadReady(page);
     await page.locator("#download-button").click();
     await page.locator(".dm-primary").waitFor({ state: "visible" });
     // Give the async max-zoom resolve a moment to settle.
@@ -199,13 +234,14 @@ function appTests(
     await page.locator(".dm-huge-modal").waitFor({ state: "hidden" });
   });
 
-  test("opens an mbtiles file via the style picker", async () => {
+  const testMbtiles = opts?.skipMbtilesTests ? test.skip : test;
+  testMbtiles("opens an mbtiles file via the style picker", async () => {
     await loadMbtilesFixture(page);
     const canvas = page.locator("#map canvas").first();
     expect(await canvas.count()).toBeGreaterThan(0);
   });
 
-  test("opens an mbtiles file via drag and drop", async () => {
+  testMbtiles("opens an mbtiles file via drag and drop", async () => {
     await page.goto(baseUrl);
     await page.locator("#style-chip").waitFor({ state: "visible" });
 
@@ -237,7 +273,7 @@ function appTests(
     );
   });
 
-  test("can pan the map by dragging", async () => {
+  testMbtiles("can pan the map by dragging", async () => {
     await loadMbtilesFixture(page);
     const canvas = page.locator("#map canvas").first();
     const box = await canvas.boundingBox();
@@ -258,7 +294,12 @@ function appTests(
     expect(centerAfter.lng).not.toBeCloseTo(centerBefore.lng, 1);
   });
 
-  test("accepts each form of Mapbox style share link", async () => {
+  // Playwright's WebKit does not route requests that pass through a controlling
+  // service worker, so these API mocks are bypassed there and the test would
+  // hit the real Mapbox API. The behaviour is engine-independent URL parsing.
+  const testRouteMock = opts?.skipRouteMocks ? test.skip : test;
+
+  testRouteMock("accepts each form of Mapbox style share link", async () => {
     const token = "pk.test-token";
     const styleBase = "api.mapbox.com/styles/v1/someone/abc123";
     const requested: string[] = [];
@@ -377,7 +418,8 @@ function appTests(
     }
   });
 
-  const testDownload = opts?.skipDownloadTest ? test.skip : test;
+  const testDownload =
+    opts?.skipDownloadTest || opts?.skipMbtilesTests ? test.skip : test;
   testDownload("can download mbtiles as smp file", { timeout: 90_000 }, async () => {
     await loadMbtilesFixture(page);
 
@@ -432,9 +474,175 @@ describeFirefox("firefox", () => {
   appTests(firefox, undefined, { skipDownloadTest: true });
 });
 
-// Playwright's WebKit uses ephemeral (non-persistent) browser contexts which
-// do not support OPFS. This app requires OPFS, so WebKit e2e tests are skipped.
-// OPFS works in real Safari — this is a Playwright limitation, not a Safari bug.
-describe.skip("webkit", () => {
-  appTests(webkit);
+// WebKit is the engine Safari ships. It only supports COEP `require-corp`, so
+// under the app's `credentialless` headers it has no SharedArrayBuffer and
+// sqlite-wasm cannot open an .mbtiles file — those tests are skipped. The
+// streaming download path is covered by the service worker test below.
+describe("webkit", () => {
+  appTests(webkit, undefined, {
+    persistent: true,
+    skipMbtilesTests: true,
+    skipRouteMocks: true,
+  });
+});
+
+// Regression test for downloads clicked before the service worker controls the
+// page: the action must stay unavailable rather than hang waiting for a stream
+// nobody reads.
+describe("without a service worker", () => {
+  let browser: Browser;
+
+  beforeAll(async () => {
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--ignore-gpu-blocklist", "--enable-webgl", ...chromiumArgs],
+    });
+  });
+
+  afterAll(async () => {
+    await browser?.close();
+  });
+
+  test("the download button stays disabled", async () => {
+    const context = await browser.newContext({ serviceWorkers: "block" });
+    try {
+      const page = await context.newPage();
+      await page.goto(baseUrl);
+      await page.locator("#style-chip").waitFor({ state: "visible" });
+      await waitForMapReady(page);
+      await page.locator("#download-button").click();
+      const primary = page.locator(".dm-primary");
+      await primary.waitFor({ state: "visible" });
+      expect(await primary.isDisabled()).toBe(true);
+      expect((await primary.textContent())?.trim()).toBe("Preparing download…");
+    } finally {
+      await context.close();
+    }
+  });
+});
+
+/** Exercises public/sw.js the way the page does: navigate to a unique
+ *  /_download/ URL first, wait for the worker to announce the request, then
+ *  hand it the stream. The app's own download needs an .mbtiles file, which
+ *  WebKit cannot open, so this covers the streaming path there. */
+function serviceWorkerDownloadTest(
+  browserType: BrowserType,
+  opts?: { launchOptions?: Record<string, unknown>; persistent?: boolean },
+) {
+  let browser: Browser | undefined;
+  let context: BrowserContext | undefined;
+  let userDataDir: string | undefined;
+  let page: Page;
+
+  beforeAll(async () => {
+    if (opts?.persistent) {
+      userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "map-downloader-"));
+      context = await browserType.launchPersistentContext(userDataDir, {
+        headless: true,
+        acceptDownloads: true,
+        ...opts?.launchOptions,
+      });
+      page = context.pages()[0] ?? (await context.newPage());
+    } else {
+      browser = await browserType.launch({
+        headless: true,
+        ...opts?.launchOptions,
+      });
+      page = await browser.newPage();
+    }
+  });
+
+  afterAll(async () => {
+    await context?.close();
+    await browser?.close();
+    if (userDataDir) fs.rmSync(userDataDir, { recursive: true, force: true });
+  });
+
+  test("streams a download through the service worker", async () => {
+    await page.goto(baseUrl);
+    await page.locator("#style-chip").waitFor({ state: "visible" });
+
+    const [download] = await Promise.all([
+      page.waitForEvent("download", { timeout: 30_000 }),
+      page.evaluate(async () => {
+        const registration = await navigator.serviceWorker.ready;
+        const sw = registration.active ?? navigator.serviceWorker.controller;
+        if (!sw) throw new Error("no active service worker");
+
+        const fileName = "sw stream test.smp";
+        const encodedName = encodeURIComponent(fileName);
+        const url = `${location.origin}/_download/${crypto.randomUUID()}/${encodedName}`;
+
+        const announced = new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 5000);
+          navigator.serviceWorker.addEventListener("message", (event) => {
+            if (
+              event.data?.type === "downloadStarted" &&
+              event.data.url === url
+            ) {
+              clearTimeout(timer);
+              resolve(true);
+            }
+          });
+        });
+
+        const iframe = document.createElement("iframe");
+        iframe.hidden = true;
+        iframe.src = url;
+        document.body.appendChild(iframe);
+
+        if (!(await announced)) {
+          throw new Error("service worker never saw the download request");
+        }
+
+        const channel = new MessageChannel();
+        // Same message protocol as the worker's MessagePortSource: it asks for
+        // a chunk, we answer with one, then close.
+        const chunks = [new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x0a, 0x00])];
+        let next = 0;
+        channel.port2.onmessage = () => {
+          if (next < chunks.length) {
+            channel.port2.postMessage({ type: 0, chunk: chunks[next++] });
+          } else {
+            channel.port2.postMessage({ type: 2 });
+          }
+        };
+        sw.postMessage(
+          {
+            url,
+            headers: {
+              // Safari ignores filename*, so an ASCII filename is sent too.
+              "content-disposition": `attachment; filename="${fileName}"; filename*=UTF-8''${encodedName}`,
+              "content-type": "application/octet-stream",
+            },
+            readablePort: channel.port1,
+          },
+          [channel.port1],
+        );
+      }),
+    ]);
+
+    // A worker that ignored the request would leave the navigation to the
+    // server, which answers unknown paths with index.html.
+    expect(download.suggestedFilename()).toMatch(/\.smp$/);
+
+    const readable = await download.createReadStream();
+    const received: Buffer[] = [];
+    for await (const chunk of readable) received.push(Buffer.from(chunk));
+    expect(Buffer.concat(received)).toEqual(
+      Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x0a, 0x00]),
+    );
+  });
+}
+
+describe("chromium service worker download", () => {
+  serviceWorkerDownloadTest(chromium, {
+    launchOptions: {
+      args: ["--ignore-gpu-blocklist", "--enable-webgl", ...chromiumArgs],
+    },
+  });
+});
+
+describe("webkit service worker download", () => {
+  serviceWorkerDownloadTest(webkit, { persistent: true });
 });

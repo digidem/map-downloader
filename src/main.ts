@@ -47,7 +47,12 @@ if ("serviceWorker" in navigator) {
   // `updateViaCache: 'none'` bypasses the browser's 24h HTTP-cache rule for sw.js.
   navigator.serviceWorker
     .register("/sw.js", { updateViaCache: "none" })
+    .then((registration) => registration.update())
     .catch((err) => console.warn("SW registration failed", err));
+  // Messages from the worker are queued until the page asks for them, and the
+  // download handshake below listens with addEventListener.
+  navigator.serviceWorker.startMessages();
+  void ensureDownloadWorker();
 }
 
 // Tile protocol for the current mbtiles file.
@@ -302,6 +307,16 @@ downloadModal.init({
   onDownload: (req, callbacks) => startDownload(req, callbacks),
 });
 overlayHost.appendChild(downloadModal.el);
+// Downloads stream through the service worker, which doesn't control the page
+// for the first moments of a first visit; clicking before then cannot work.
+downloadModal.downloadReady = !!navigator.serviceWorker?.controller;
+navigator.serviceWorker?.addEventListener(
+  "controllerchange",
+  () => {
+    downloadModal.downloadReady = true;
+  },
+  { once: true },
+);
 downloadBtn.addEventListener("click", () => {
   // currentGeoBbox is populated as soon as the map first lays out; if a click
   // beats that race, fall back to whatever the map can derive right now.
@@ -444,7 +459,11 @@ function startDownload(
     (req.name.replace(/[^a-z0-9-_ ]/gi, "_").trim() || "map") + ".smp";
 
   (async () => {
+    let cleanup: (() => void) | undefined;
     try {
+      const channel = await prepareSwDownload(fileName);
+      cleanup = channel.cleanup;
+
       // Build progress + completion handlers attached to the worker.
       const onComplete = waitForSmpComplete(
         (fraction) => {
@@ -455,7 +474,6 @@ function startDownload(
         },
       );
 
-      const channel = await prepareSwDownload(fileName);
       const style = req.style;
       if ("isMbtiles" in style && style.isMbtiles) {
         worker.postMessage(
@@ -501,6 +519,8 @@ function startDownload(
       if (!cancelled) callbacks.onProgress({ fraction: 1, done: true });
     } catch (err) {
       if (!cancelled) callbacks.onError((err as Error).message);
+    } finally {
+      cleanup?.();
     }
   })();
 
@@ -513,35 +533,111 @@ function startDownload(
 
 interface SwDownloadChannel {
   workerPort: MessagePort;
+  /** Removes the iframe that started the download. */
+  cleanup: () => void;
 }
 
-/** Bind a download URL in the service worker, return the worker-side port. */
+// Kept in step with public/sw.js: an older worker ignores /_download/ requests.
+const DOWNLOAD_PATH = "/_download/";
+const DOWNLOAD_PROTOCOL = 1;
+
+/** Ask the active service worker which download protocol it speaks (0 = none) */
+function downloadProtocol(registration: ServiceWorkerRegistration) {
+  return new Promise<number>((resolve) => {
+    const sw = registration.active;
+    if (!sw) return resolve(0);
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => resolve(0), 1000);
+    channel.port1.onmessage = (event) => {
+      clearTimeout(timer);
+      resolve(event.data?.downloadProtocol ?? 0);
+    };
+    sw.postMessage({ type: "ping" }, [channel.port2]);
+  });
+}
+
+/** A worker installed before the download path existed silently ignores those
+ *  requests, and the page only finds out when a download fails, so replace it
+ *  up front. */
+async function ensureDownloadWorker() {
+  const registration = await navigator.serviceWorker?.ready;
+  if (!registration) return;
+  if ((await downloadProtocol(registration)) >= DOWNLOAD_PROTOCOL) return;
+  await registration.update().catch(() => {});
+}
+
+/** Resolves once the service worker reports it received the download request */
+function waitForDownloadStart(url: string, timeout: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const finish = (started: boolean) => {
+      clearTimeout(timer);
+      navigator.serviceWorker.removeEventListener("message", onMessage);
+      resolve(started);
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.type === "downloadStarted" && event.data.url === url) {
+        finish(true);
+      }
+    };
+    const timer = setTimeout(() => finish(false), timeout);
+    navigator.serviceWorker.addEventListener("message", onMessage);
+  });
+}
+
+/** Start the browser download and return the port the SMP stream writes to. */
 async function prepareSwDownload(fileName: string): Promise<SwDownloadChannel> {
-  const sw = await navigator.serviceWorker?.getRegistration();
-  if (!sw?.active) throw new Error("Service worker not available");
-  const channel = new MessageChannel();
+  if (!navigator.serviceWorker?.controller) {
+    throw new Error(
+      "Downloads need the service worker — reload the page and try again",
+    );
+  }
+
   const encodedName = encodeURIComponent(fileName)
     .replace(
       /['()]/g,
       (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
     )
     .replace(/\*/g, "%2A");
-  const headers = {
-    "content-disposition": "attachment; filename*=UTF-8''" + encodedName,
-    "content-type": "application/octet-stream",
-  };
-  sw.active.postMessage(
-    { url: sw.scope + encodedName, headers, readablePort: channel.port1 },
-    [channel.port1],
-  );
+  const url = `${location.origin}${DOWNLOAD_PATH}${crypto.randomUUID()}/${encodedName}`;
 
-  // Trigger the browser download by navigating a hidden iframe to the URL.
+  // Navigate first and synchronously, before any await: Safari only starts a
+  // download while the click's user activation is live. The service worker
+  // holds the request open until the stream below reaches it.
   const iframe = document.createElement("iframe");
   iframe.hidden = true;
-  iframe.src = sw.scope + encodedName;
+  iframe.src = url;
   document.body.appendChild(iframe);
+  const cleanup = () => iframe.remove();
 
-  return { workerPort: channel.port2 };
+  // Nothing is generated until the request is known to have arrived.
+  if (!(await waitForDownloadStart(url, 5000))) {
+    cleanup();
+    throw new Error(
+      "The service worker did not receive the download request — reload the page and try again",
+    );
+  }
+
+  const registration = await navigator.serviceWorker.ready;
+  const sw = registration.active ?? navigator.serviceWorker.controller;
+  if (!sw) {
+    cleanup();
+    throw new Error("Service worker not available");
+  }
+
+  const asciiName = fileName
+    .replace(/[^\x20-\x7e]/g, "_")
+    .replace(/["\\]/g, "_");
+  const headers = {
+    // Safari ignores filename*, so send a plain ASCII filename as well.
+    "content-disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`,
+    "content-type": "application/octet-stream",
+  };
+  const channel = new MessageChannel();
+  sw.postMessage({ url, headers, readablePort: channel.port1 }, [
+    channel.port1,
+  ]);
+
+  return { workerPort: channel.port2, cleanup };
 }
 
 function waitForSmpComplete(
