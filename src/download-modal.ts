@@ -78,6 +78,7 @@ export class DownloadModal extends LightElement {
     name: { state: true },
     desc: { state: true },
     acknowledged: { state: true },
+    downloadReady: { state: true },
     effectiveMaxZoom: { state: true },
     avgTileBytes: { state: true },
     currentStyle: { state: true },
@@ -97,6 +98,9 @@ export class DownloadModal extends LightElement {
   declare desc: string;
   /** Ticked the licence-acknowledgement checkbox (attribution/restrictive styles). */
   declare acknowledged: boolean;
+  /** Downloads stream through the service worker, which doesn't control the
+   *  page for the first moments of a first visit. Set by the host. */
+  declare downloadReady: boolean;
   /** Effective slider cap. Starts at the global MAX_ZOOM_LIMIT, narrowed down
    *  once the source's actual maxzoom is known (preset.maxZoom, mbtiles
    *  metadata, or a fetched style.json/TileJSON). */
@@ -136,6 +140,7 @@ export class DownloadModal extends LightElement {
     this.name = "";
     this.desc = "";
     this.acknowledged = false;
+    this.downloadReady = false;
     this.effectiveMaxZoom = MAX_ZOOM_LIMIT;
     this.avgTileBytes = null;
     this.currentStyle = null;
@@ -790,12 +795,14 @@ export class DownloadModal extends LightElement {
   private buildPrimaryButton(): TemplateResult {
     const isDownloading = this.status === "downloading";
     const isHuge = this.status === "idle" && this.warnLevel === "huge";
+    const notReady = this.status === "idle" && !this.downloadReady;
     const disabled =
-      isDownloading || (this.status === "idle" && !this.canStart);
+      isDownloading || notReady || (this.status === "idle" && !this.canStart);
 
     let label: string;
     if (this.status === "idle") {
-      label = isHuge ? "Review & download…" : "Download package";
+      if (notReady) label = "Preparing download…";
+      else label = isHuge ? "Review & download…" : "Download package";
     } else if (this.status === "downloading") {
       label = `Downloading… ${Math.round(this.progress * 100)}%`;
     } else if (this.status === "error") {
