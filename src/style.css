@@ -1035,6 +1035,17 @@ body {
   background: #fce8e8;
   color: #a02020;
 }
+.sp-mbtiles-unsupported {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: #fce8e8;
+  color: #a02020;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.sp-mbtiles-unsupported a {
+  color: inherit;
+}
 .sp-mbtiles-drop {
   border: 2px dashed #ccc;
   border-radius: 12px;

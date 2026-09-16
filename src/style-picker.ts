@@ -52,6 +52,12 @@ const PREVIEW_ZOOM = 12;
 
 type Tab = "browse" | "recents" | "custom" | "mbtiles";
 
+// Reading a local .mbtiles uses sqlite-wasm's OPFS VFS, which needs
+// SharedArrayBuffer; Safari can't provide it here because it only implements
+// COEP require-corp, which would block the third-party tile sources this app
+// exists to download. See https://github.com/digidem/mbtiles-reader/issues/12
+const MBTILES_SUPPORTED = typeof SharedArrayBuffer !== "undefined";
+
 const TAB_LABELS: Record<Tab, string> = {
   browse: "Browse",
   recents: "Recents",
@@ -950,6 +956,27 @@ export class StylePicker extends LightElement {
 
   private renderMbtiles(): TemplateResult {
     const isMobile = this.opts.isMobile();
+    if (!MBTILES_SUPPORTED) {
+      return html`
+        <div class="sp-mbtiles">
+          <p class="sp-prose">
+            Load a local <code>.mbtiles</code> file as the basemap. The map view
+            will fit to the file's bounds.
+          </p>
+          <p class="sp-mbtiles-unsupported">
+            This doesn't work in Safari yet — reading a local
+            <code>.mbtiles</code> file needs browser storage support that Safari
+            doesn't offer here. Use Chrome, Edge or Firefox for now;
+            <a
+              href="https://github.com/digidem/mbtiles-reader/issues/12"
+              target="_blank"
+              rel="noreferrer"
+              >progress is tracked here</a
+            >.
+          </p>
+        </div>
+      `;
+    }
     return html`
       <div class="sp-mbtiles">
         <p class="sp-prose">
