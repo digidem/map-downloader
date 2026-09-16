@@ -3,8 +3,31 @@ import { isTileUrlTemplate, type AppStyle } from "./preset-styles.ts";
 
 type Props = Record<string, string | number | boolean>;
 
+/** Event names are static; anything variable belongs in a property. */
+export type AnalyticsEvent =
+  | "style_picker_open"
+  | "style_select"
+  | "custom_url_validate"
+  | "bounds_edit"
+  | "bounds_lock"
+  | "info_panel_open"
+  | "overlay_add"
+  | "download_dialog_open"
+  | "huge_download_prompt"
+  | "download_start"
+  | "download_complete"
+  | "download_fail";
+
 const POSTHOG_TOKEN = "phc_m6grg3eEFLGiBVboGAvhsfQpFjHPfLqkvKN3ixm8LL8i";
-const POSTHOG_ENDPOINT = "https://us.i.posthog.com/i/v0/e/";
+// Proxied by the worker (worker/index.ts) so ad blockers don't drop events.
+const POSTHOG_ENDPOINT = "/ingest/i/v0/e/";
+const CAMPAIGN_PARAMS = [
+  "utm_source",
+  "utm_medium",
+  "utm_campaign",
+  "utm_content",
+  "utm_term",
+];
 // Keeps dev, e2e, PR-preview and automated traffic out of PostHog.
 const POSTHOG_ENABLED =
   location.hostname === "map-downloader.comapeo.app" && !navigator.webdriver;
@@ -50,7 +73,8 @@ function sendToPostHog(event: string, properties: Record<string, unknown>) {
       api_key: POSTHOG_TOKEN,
       event,
       distinct_id: "$posthog_cookieless",
-      timestamp: new Date().toISOString(),
+      // No client timestamp: a skewed device clock can put the event on a day
+      // the cookieless hash rejects. Events are sent immediately anyway.
       properties: {
         ...properties,
         $cookieless_mode: true,
@@ -76,55 +100,69 @@ function sendToPostHog(event: string, properties: Record<string, unknown>) {
   }).catch(() => {});
 }
 
-export function initAnalytics() {
-  try {
-    sendToPostHog("$pageview", {});
-  } catch {
-    // Analytics must never break the app.
+function campaignProps(): Props {
+  const params = new URLSearchParams(location.search);
+  const props: Props = {};
+  for (const key of CAMPAIGN_PARAMS) {
+    const value = params.get(key);
+    if (value) props[key] = value;
   }
+  return props;
 }
 
-/** Send an event to PostHog. Exact numbers are for aggregation; the bucketed
- *  values alongside them keep breakdowns readable. */
-export function track(event: string, props: Props = {}) {
+let pageviewAt = 0;
+let pageleaveSent = false;
+
+function sendPageview() {
+  pageviewAt = Date.now();
+  pageleaveSent = false;
+  sendToPostHog("$pageview", campaignProps());
+}
+
+// Without a $pageleave, a visit with no other events has zero duration and
+// counts as a bounce. Mobile browsers often skip `pagehide` when a
+// backgrounded tab is killed, so a hidden page counts as leaving too.
+function sendPageleave() {
+  if (pageleaveSent) return;
+  pageleaveSent = true;
+  sendToPostHog("$pageleave", {
+    $prev_pageview_pathname: location.pathname,
+    $prev_pageview_duration: (Date.now() - pageviewAt) / 1000,
+  });
+}
+
+function safely(fn: () => void) {
+  return () => {
+    try {
+      fn();
+    } catch {
+      // Analytics must never break the app.
+    }
+  };
+}
+
+export function initAnalytics() {
+  safely(sendPageview)();
+  window.addEventListener("pagehide", safely(sendPageleave));
+  document.addEventListener(
+    "visibilitychange",
+    safely(() => {
+      if (document.visibilityState === "hidden") sendPageleave();
+    }),
+  );
+  // A page restored from the back/forward cache is a new visit.
+  window.addEventListener("pageshow", (e) => {
+    if (e.persisted) safely(sendPageview)();
+  });
+}
+
+export function track(event: AnalyticsEvent, props: Props = {}) {
   try {
     sendToPostHog(event, props);
   } catch {
     // Analytics must never break the app.
   }
 }
-
-// Bucketed alongside the exact numbers so a breakdown by value stays readable.
-const AREA_KM2_EDGES = [1, 10, 100, 1_000, 10_000, 100_000, 1_000_000];
-const TILE_EDGES = [100, 1_000, 10_000, 25_000, 100_000, 500_000, 1_000_000];
-const SIZE_MB_EDGES = [1, 10, 50, 100, 250, 1_000, 2_500];
-const FEATURE_EDGES = [10, 100, 1_000, 10_000, 100_000];
-const DURATION_S_EDGES = [10, 60, 300, 1_800];
-
-function compact(n: number): string {
-  if (n >= 1_000_000) return `${n / 1_000_000}M`;
-  if (n >= 1_000) return `${n / 1_000}k`;
-  return String(n);
-}
-
-function bucket(value: number, edges: number[]): string {
-  for (let i = 0; i < edges.length; i++) {
-    if (value < edges[i]) {
-      return i === 0
-        ? `<${compact(edges[0])}`
-        : `${compact(edges[i - 1])}–${compact(edges[i])}`;
-    }
-  }
-  return `≥${compact(edges[edges.length - 1])}`;
-}
-
-export const areaBucket = (km2: number) => bucket(km2, AREA_KM2_EDGES);
-export const tileBucket = (tiles: number) => bucket(tiles, TILE_EDGES);
-export const sizeBucket = (bytes: number) =>
-  bucket(bytes / (1024 * 1024), SIZE_MB_EDGES);
-export const featureBucket = (n: number) => bucket(n, FEATURE_EDGES);
-export const durationBucket = (ms: number) =>
-  bucket(ms / 1000, DURATION_S_EDGES);
 
 export function bboxAreaKm2(b: GeoBbox): number {
   const R = 6371.0088;
@@ -162,22 +200,29 @@ export function customUrlType(url: string, hasSpec: boolean): string {
 }
 
 export function styleProps(style: AppStyle): Props {
-  const common = { kind: style.kind, license: style.license };
+  const common = { style_kind: style.kind, style_license: style.license };
   if ("isMbtiles" in style && style.isMbtiles) {
     // The file name may be personal, so it isn't sent.
-    return { ...common, source: "mbtiles", style: "Local .mbtiles" };
+    return {
+      ...common,
+      style_source: "mbtiles",
+      style_name: "Local .mbtiles",
+    };
   }
   if (style.id === "custom") {
     return {
       ...common,
-      source: "custom",
-      style: urlHost(style.url),
-      custom_type: customUrlType(style.url, "spec" in style && !!style.spec),
+      style_source: "custom",
+      style_name: urlHost(style.url),
+      custom_url_type: customUrlType(
+        style.url,
+        "spec" in style && !!style.spec,
+      ),
     };
   }
   return {
     ...common,
-    source: style.id.startsWith("qms-") ? "qms" : "preset",
-    style: style.name,
+    style_source: style.id.startsWith("qms-") ? "qms" : "preset",
+    style_name: style.name,
   };
 }

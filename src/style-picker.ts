@@ -858,10 +858,10 @@ export class StylePicker extends LightElement {
 
       const resolved = await resolveCustomStyle(finalUrl, subdomains, scheme);
       const accessToken = tokenInfo.required ? this.token : undefined;
-      track("Custom URL Validated", {
+      track("custom_url_validate", {
         result: "ok",
-        host: urlHost(this.customUrl),
-        type: customUrlType(this.customUrl, !!resolved.style.spec),
+        url_host: urlHost(this.customUrl),
+        custom_url_type: customUrlType(this.customUrl, !!resolved.style.spec),
         token_provider: tokenInfo.providerLabel ?? "none",
       });
 
@@ -886,12 +886,14 @@ export class StylePicker extends LightElement {
       this.opts.onSelectStyle(styleWithToken);
       setTimeout(() => this.close(), 400);
     } catch (e) {
-      track("Custom URL Validated", {
+      track("custom_url_validate", {
         result: "error",
-        host: urlHost(this.customUrl),
-        type: isTileUrlTemplate(this.customUrl) ? "tile-url" : "unknown",
+        url_host: urlHost(this.customUrl),
+        custom_url_type: isTileUrlTemplate(this.customUrl) ? "tile-url" : "unknown",
         token_provider: tokenInfo.providerLabel ?? "none",
-        error: sanitizeError((e as Error).message ?? "Validation failed"),
+        error_message: sanitizeError(
+          (e as Error).message ?? "Validation failed",
+        ),
       });
       this.validateMsg = {
         ok: false,

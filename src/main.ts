@@ -28,7 +28,6 @@ import { layerStyles } from "./layer-styles.ts";
 import createProtocolHandler from "./protocol-handler.ts";
 import {
   initAnalytics,
-  sizeBucket,
   styleProps,
   track,
 } from "./analytics.ts";
@@ -164,13 +163,13 @@ const help = new HelpButton();
 attribution.init({
   onOpen: () => {
     help.close();
-    track("Info Opened", { panel: "attribution" });
+    track("info_panel_open", { panel: "attribution" });
   },
 });
 help.init({
   onOpen: () => {
     attribution.close();
-    track("Info Opened", { panel: "help" });
+    track("info_panel_open", { panel: "help" });
   },
 });
 topRight.appendChild(attribution.el);
@@ -223,7 +222,7 @@ let lockedBounds: GeoBbox | null = null;
 const boundsPanel = new BoundsPanel();
 boundsPanel.init({
   onApply: (next) => {
-    track("Bounds Edited", { locked: lockedBounds != null });
+    track("bounds_edit", { is_locked: lockedBounds != null });
     // After an inputs-driven edit, settle the map onto the new bbox the same
     // way a mouse resize does.
     if (lockedBounds) {
@@ -239,7 +238,7 @@ boundsPanel.init({
   onLock: () => {
     const geo = bboxMap.lockBounds();
     if (!geo) return;
-    track("Bounds Locked");
+    track("bounds_lock");
     lockedBounds = geo;
     currentGeoBbox = geo;
     boundsPanel.setLocked(true);
@@ -294,7 +293,7 @@ function thumbColor(id: string): string {
 const stylePicker = new StylePicker();
 stylePicker.init({
   onSelectStyle: (s) => {
-    track("Style Selected", styleProps(s));
+    track("style_select", styleProps(s));
     setStyle(s);
   },
   onSelectMbtiles: (file) => loadMbtilesFile(file, "picker"),
@@ -302,7 +301,7 @@ stylePicker.init({
 });
 overlayHost.appendChild(stylePicker.el);
 styleChip.addEventListener("click", () => {
-  track("Style Picker Opened");
+  track("style_picker_open");
   const c = bboxMap.map.getCenter();
   stylePicker.open(currentStyle.id, [c.lng, c.lat]);
 });
@@ -419,11 +418,10 @@ async function loadMbtilesFile(file: File, via: "picker" | "drop") {
         : "Local .mbtiles file.",
     license: "open",
   };
-  track("Style Selected", {
+  track("style_select", {
     ...styleProps(mbtilesStyle),
     via,
-    format: String(metadata.format ?? "unknown"),
-    file_size_mb: sizeBucket(file.size),
+    tile_format: String(metadata.format ?? "unknown"),
     file_size_bytes: file.size,
   });
   setStyle(mbtilesStyle);

@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "map-downloader",
+  "main": "worker/index.ts",
   "compatibility_date": "2026-09-15",
   "routes": [
     { "pattern": "map-downloader.comapeo.app", "custom_domain": true },
@@ -12,5 +13,7 @@
     "directory": "./dist",
     // Matches Pages' fallback to index.html when no 404.html exists.
     "not_found_handling": "single-page-application",
+    // PostHog ingest proxy; all other paths are served as static assets.
+    "run_worker_first": ["/ingest/*"],
   },
 }

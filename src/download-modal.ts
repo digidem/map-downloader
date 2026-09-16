@@ -30,14 +30,10 @@ import {
   sampleAvgTileBytes,
 } from "./tile-sampler.ts";
 import {
-  areaBucket,
   bboxAreaKm2,
-  durationBucket,
   regionCell,
   sanitizeError,
-  sizeBucket,
   styleProps,
-  tileBucket,
   track,
 } from "./analytics.ts";
 
@@ -227,7 +223,7 @@ export class DownloadModal extends LightElement {
     this.previewContainer.className = "dm-preview-host";
 
     this.isOpen = true;
-    track("Download Opened", styleProps(args.style));
+    track("download_dialog_open", styleProps(args.style));
     this.kickoffSample(0);
 
     // Always run the async resolver. It walks style.json → TileJSON, then
@@ -847,7 +843,7 @@ export class DownloadModal extends LightElement {
     backdrop.className = "dm-huge-backdrop";
     backdrop.addEventListener("click", (e) => {
       if (e.target !== backdrop) return;
-      track("Huge Download Prompt", { outcome: "cancelled" });
+      track("huge_download_prompt", { outcome: "cancelled" });
       this.closeHugeConfirm();
     });
 
@@ -889,14 +885,14 @@ export class DownloadModal extends LightElement {
     input.addEventListener("input", sync);
     confirmBtn.addEventListener("click", () => {
       if (input.value.trim() !== expected) return;
-      track("Huge Download Prompt", { outcome: "confirmed" });
+      track("huge_download_prompt", { outcome: "confirmed" });
       this.closeHugeConfirm();
       this.startDownload();
     });
     modal
       .querySelector<HTMLButtonElement>(".dm-huge-cancel")!
       .addEventListener("click", () => {
-        track("Huge Download Prompt", { outcome: "cancelled" });
+        track("huge_download_prompt", { outcome: "cancelled" });
         this.closeHugeConfirm();
       });
 
@@ -916,28 +912,21 @@ export class DownloadModal extends LightElement {
     const isMbtiles = "isMbtiles" in this.currentStyle;
     const props = {
       ...styleProps(this.currentStyle),
-      retry: this.status === "error",
+      is_retry: this.status === "error",
       // An .mbtiles export converts the whole file, ignoring bbox and zoom.
       ...(isMbtiles
         ? {}
         : {
             max_zoom: this.maxZoom,
-            area_km2: areaBucket(bboxAreaKm2(this.currentGeoBbox)),
-            region: regionCell(this.currentGeoBbox),
-            tiles: tileBucket(this.tileCount),
-            est_size_mb: sizeBucket(this.tileCount * this.bytesPerTile),
-            size_warning: this.warnLevel ?? "none",
+            bbox_area_km2:
+              Math.round(bboxAreaKm2(this.currentGeoBbox) * 10) / 10,
+            region_cell: regionCell(this.currentGeoBbox),
+            tile_count: this.tileCount,
+            est_size_bytes: Math.round(this.tileCount * this.bytesPerTile),
+            size_warning_level: this.warnLevel ?? "none",
           }),
     };
-    const metrics: Record<string, number> = isMbtiles
-      ? {}
-      : {
-          tile_count: this.tileCount,
-          est_size_bytes: Math.round(this.tileCount * this.bytesPerTile),
-          bbox_area_km2:
-            Math.round(bboxAreaKm2(this.currentGeoBbox) * 10) / 10,
-        };
-    track("Download Started", { ...props, ...metrics });
+    track("download_start", props);
     const startedAt = Date.now();
     // Progress/error callbacks can repeat; report the outcome once.
     let reported = false;
@@ -963,10 +952,8 @@ export class DownloadModal extends LightElement {
             if (!reported) {
               reported = true;
               const durationMs = Date.now() - startedAt;
-              track("Download Completed", {
+              track("download_complete", {
                 ...props,
-                ...metrics,
-                duration_s: durationBucket(durationMs),
                 duration_ms: durationMs,
               });
             }
@@ -975,10 +962,9 @@ export class DownloadModal extends LightElement {
         onError: (msg) => {
           if (!reported) {
             reported = true;
-            track("Download Failed", {
+            track("download_fail", {
               ...props,
-              ...metrics,
-              error: sanitizeError(msg),
+              error_message: sanitizeError(msg),
               progress_pct: Math.round(this.progress * 10) * 10,
             });
           }
