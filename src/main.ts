@@ -27,11 +27,19 @@ import { isGeoJSONFile } from "./overlay-model.ts";
 import { layerStyles } from "./layer-styles.ts";
 import createProtocolHandler from "./protocol-handler.ts";
 import {
+  initAnalytics,
+  sizeBucket,
+  styleProps,
+  track,
+} from "./analytics.ts";
+import {
   loadRecents,
   loadSelected,
   recentIdForUrl,
   saveSelected,
 } from "./recents-store.ts";
+
+initAnalytics();
 
 // ── Service worker (streaming downloads only, no offline caching) ─────────
 if ("serviceWorker" in navigator) {
@@ -153,8 +161,18 @@ overlayHost.appendChild(topRight);
 
 const attribution = new AttributionButton();
 const help = new HelpButton();
-attribution.init({ onOpen: () => help.close() });
-help.init({ onOpen: () => attribution.close() });
+attribution.init({
+  onOpen: () => {
+    help.close();
+    track("Info Opened", { panel: "attribution" });
+  },
+});
+help.init({
+  onOpen: () => {
+    attribution.close();
+    track("Info Opened", { panel: "help" });
+  },
+});
 topRight.appendChild(attribution.el);
 topRight.appendChild(help.el);
 attribution.setStyle(currentStyle);
@@ -205,6 +223,7 @@ let lockedBounds: GeoBbox | null = null;
 const boundsPanel = new BoundsPanel();
 boundsPanel.init({
   onApply: (next) => {
+    track("Bounds Edited", { locked: lockedBounds != null });
     // After an inputs-driven edit, settle the map onto the new bbox the same
     // way a mouse resize does.
     if (lockedBounds) {
@@ -220,6 +239,7 @@ boundsPanel.init({
   onLock: () => {
     const geo = bboxMap.lockBounds();
     if (!geo) return;
+    track("Bounds Locked");
     lockedBounds = geo;
     currentGeoBbox = geo;
     boundsPanel.setLocked(true);
@@ -273,12 +293,16 @@ function thumbColor(id: string): string {
 // otherwise the bundler drops it and its customElements.define side-effect.
 const stylePicker = new StylePicker();
 stylePicker.init({
-  onSelectStyle: (s) => setStyle(s),
-  onSelectMbtiles: (file) => loadMbtilesFile(file),
+  onSelectStyle: (s) => {
+    track("Style Selected", styleProps(s));
+    setStyle(s);
+  },
+  onSelectMbtiles: (file) => loadMbtilesFile(file, "picker"),
   isMobile,
 });
 overlayHost.appendChild(stylePicker.el);
 styleChip.addEventListener("click", () => {
+  track("Style Picker Opened");
   const c = bboxMap.map.getCenter();
   stylePicker.open(currentStyle.id, [c.lng, c.lat]);
 });
@@ -330,7 +354,7 @@ function persistSelected(style: AppStyle) {
 }
 
 // ── MBTiles flow ──────────────────────────────────────────────────────────
-async function loadMbtilesFile(file: File) {
+async function loadMbtilesFile(file: File, via: "picker" | "drop") {
   const metaP = new Promise<Record<string, any>>((resolve) => {
     const h = (event: MessageEvent) => {
       if (event.data?.type === "metadata") {
@@ -395,6 +419,13 @@ async function loadMbtilesFile(file: File) {
         : "Local .mbtiles file.",
     license: "open",
   };
+  track("Style Selected", {
+    ...styleProps(mbtilesStyle),
+    via,
+    format: String(metadata.format ?? "unknown"),
+    file_size_mb: sizeBucket(file.size),
+    file_size_bytes: file.size,
+  });
   setStyle(mbtilesStyle);
   if (Array.isArray(metadata.bounds) && metadata.bounds.length === 4) {
     bboxMap.fitBounds(
@@ -580,13 +611,13 @@ document.addEventListener("drop", (e) => {
   // GeoJSON files become overlays; an .mbtiles file replaces the basemap.
   const geojson = Array.from(files).filter(isGeoJSONFile);
   if (geojson.length > 0) {
-    void overlayPanel.addFiles(geojson);
+    void overlayPanel.addFiles(geojson, "drop");
     return;
   }
   const mbtiles = Array.from(files).find((f) =>
     /\.(mbtiles|sqlite|sqlite3|db)$/i.test(f.name),
   );
-  if (mbtiles) loadMbtilesFile(mbtiles);
+  if (mbtiles) loadMbtilesFile(mbtiles, "drop");
 });
 
 // ── Resize re-evaluation (mobile vs desktop transitions) ──────────────────

@@ -3,6 +3,7 @@ import { classMap } from "lit/directives/class-map.js";
 import type { Map as MaplibreMap } from "maplibre-gl";
 import type { FeatureCollection } from "geojson";
 import { LightElement } from "./lit-base.ts";
+import { featureBucket, sanitizeError, track } from "./analytics.ts";
 import {
   buildLayerStyle,
   filterByGeomType,
@@ -139,7 +140,7 @@ export class OverlayPanel extends LightElement {
 
   /** Parse + add one or more GeoJSON files. Non-GeoJSON files are ignored;
    *  parse failures surface as an inline error in the panel header. */
-  async addFiles(files: FileList | File[]) {
+  async addFiles(files: FileList | File[], via: "picker" | "drop" = "picker") {
     const geojson = Array.from(files).filter(isGeoJSONFile);
     if (geojson.length === 0) return;
     let next = this.layers;
@@ -151,8 +152,20 @@ export class OverlayPanel extends LightElement {
         const created = this.fanOut(file.name, fc);
         if (!firstNewId && created[0]) firstNewId = created[0].id;
         next = [...created, ...next];
+        track("Overlay Added", {
+          result: "ok",
+          via,
+          geometry: created.map((l) => l.geomType).join(",") || "empty",
+          features: featureBucket(fc.features.length),
+          feature_count: fc.features.length,
+        });
       } catch (err) {
         errors.push((err as Error).message);
+        track("Overlay Added", {
+          result: "error",
+          via,
+          error: sanitizeError((err as Error).message),
+        });
       }
     }
     if (next !== this.layers) {
