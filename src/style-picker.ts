@@ -10,7 +10,7 @@ import {
   CATEGORY_LABELS,
   LICENSE_COLORS,
   LICENSE_LABELS,
-  CUSTOM_URL_ATTRIBUTION,
+  customSourceInfo,
   fillTileUrl,
   hasSubdomainPlaceholder,
   isTileUrlTemplate,
@@ -30,13 +30,22 @@ import {
   type QmsCatalogueEntry,
 } from "./qms-catalogue.ts";
 import {
+  customStyleFromRecent,
   loadRecents,
+  recentDisplayName,
   recentIdForUrl,
   removeRecent,
   saveRecent,
   type RecentEntry,
 } from "./recents-store.ts";
 import { customUrlType, sanitizeError, track, urlHost } from "./analytics.ts";
+import { combineAttributions } from "./attribution.ts";
+import {
+  mapboxAccessToken,
+  mapboxStyleUri,
+  normalizeMapboxUrl,
+  parseMapboxStyleUrl,
+} from "./mapbox.ts";
 
 /** Zoom used for the card preview tile (city-level detail). */
 const PREVIEW_ZOOM = 12;
@@ -81,6 +90,17 @@ interface TokenInfo {
 
 function detectToken(url: string): TokenInfo {
   if (!url) return { required: false };
+  const mapboxStyle = parseMapboxStyleUrl(url);
+  if (mapboxStyle) {
+    return mapboxStyle.accessToken
+      ? { required: false }
+      : {
+          required: true,
+          providerLabel: "Mapbox",
+          paramName: "access_token",
+          placeholder: "pk.eyJ1IjoieW91c…",
+        };
+  }
   const lower = url.toLowerCase();
   const has = (param: string) =>
     new RegExp("[?&]" + param + "=", "i").test(url);
@@ -593,12 +613,6 @@ export class StylePicker extends LightElement {
   }
 
   private recentCard(r: RecentEntry): TemplateResult {
-    let host = r.url;
-    try {
-      host = new URL(r.url).hostname.replace(/^www\./, "");
-    } catch {
-      /* leave as-is */
-    }
     let imgUrl: string | null = null;
     if (r.previewKind === "raster" && r.previewTileUrl) {
       const [lng, lat] = this.previewCenter;
@@ -618,7 +632,7 @@ export class StylePicker extends LightElement {
           ) {
             return;
           }
-          this.opts.onSelectStyle(this.styleFromRecent(r));
+          this.opts.onSelectStyle(customStyleFromRecent(r));
           this.close();
         }}
       >
@@ -638,7 +652,7 @@ export class StylePicker extends LightElement {
             : nothing}
         </div>
         <div class="sp-preset-meta">
-          <div class="sp-preset-name">${host}</div>
+          <div class="sp-preset-name">${recentDisplayName(r)}</div>
           <div class="sp-preset-desc">${r.url}</div>
           <div class="sp-recent-row">
             <span class="sp-preset-tag">${r.kind} · custom</span>
@@ -659,22 +673,6 @@ export class StylePicker extends LightElement {
     `;
   }
 
-  private styleFromRecent(r: RecentEntry): CustomStyle {
-    return {
-      id: "custom",
-      name: r.name,
-      desc: r.url,
-      url: r.url,
-      kind: r.kind,
-      spec: r.spec,
-      accessToken: r.accessToken,
-      maxZoom: r.maxZoom,
-      // Custom sources carry no licence metadata — flag them restrictive.
-      license: "restrictive",
-      attribution: CUSTOM_URL_ATTRIBUTION,
-    };
-  }
-
   // ─── Custom URL tab ─────────────────────────────────────────────────────
 
   private validateBtnDisabled(): boolean {
@@ -692,7 +690,8 @@ export class StylePicker extends LightElement {
     return html`
       <div class="sp-custom">
         <p class="sp-prose">
-          Paste a link to a Mapbox/MapLibre <code>style.json</code>, a TileJSON,
+          Paste a link to a Mapbox/MapLibre <code>style.json</code>, a Mapbox
+          Studio share link (e.g. <code>mapbox://styles/…</code>), a TileJSON,
           or a tile URL template containing <code>{z}/{x}/{y}</code> or
           <code>{quadkey}</code>.
         </p>
@@ -794,8 +793,9 @@ export class StylePicker extends LightElement {
               (this.token = (e.target as HTMLInputElement).value)}
           />
           <div class="sp-token-hint">
-            Appended to the URL at request time. Your token isn't stored or
-            shared.
+            Sent only to ${info.providerLabel}, never to our servers. It's saved
+            in this browser with your recent styles; remove the style from
+            Recents to delete it.
           </div>
         </div>
       </div>
@@ -844,10 +844,25 @@ export class StylePicker extends LightElement {
     this.validateMsg = null;
 
     try {
-      const finalUrl =
-        tokenInfo.required && this.token
+      const mapboxStyle = parseMapboxStyleUrl(this.customUrl);
+      const accessToken = mapboxStyle
+        ? (mapboxStyle.accessToken ?? this.token.trim())
+        : tokenInfo.required
+          ? this.token
+          : undefined;
+      if (mapboxStyle && accessToken?.startsWith("sk.")) {
+        throw new Error(
+          "Use a public Mapbox token (pk.…), not a secret token (sk.…)",
+        );
+      }
+      // Mapbox styles are kept as mapbox:// URIs with the token alongside, so
+      // any of the share-link variants resolve to the same style.
+      const finalUrl = mapboxStyle
+        ? mapboxStyleUri(mapboxStyle)
+        : tokenInfo.required && this.token
           ? injectToken(this.customUrl, tokenInfo.paramName!, this.token)
           : this.customUrl;
+      const recentUrl = mapboxStyle ? finalUrl : this.customUrl;
 
       const subdomains = hasSubdomainPlaceholder(this.customUrl)
         ? parseSubdomains(this.subdomainText)
@@ -856,8 +871,12 @@ export class StylePicker extends LightElement {
         ? this.scheme
         : undefined;
 
-      const resolved = await resolveCustomStyle(finalUrl, subdomains, scheme);
-      const accessToken = tokenInfo.required ? this.token : undefined;
+      const resolved = await resolveCustomStyle(
+        finalUrl,
+        subdomains,
+        scheme,
+        accessToken,
+      );
       track("custom_url_validate", {
         result: "ok",
         url_host: urlHost(this.customUrl),
@@ -871,12 +890,13 @@ export class StylePicker extends LightElement {
         accessToken,
       };
       saveRecent({
-        id: recentIdForUrl(this.customUrl),
-        url: this.customUrl,
-        name: this.customUrl,
+        id: recentIdForUrl(recentUrl),
+        url: recentUrl,
+        name: resolved.sourceName ?? recentUrl,
         kind: resolved.style.kind,
         spec: resolved.style.spec,
         accessToken,
+        attribution: resolved.sourceAttribution,
         maxZoom: resolved.style.maxZoom,
         previewTileUrl: resolved.previewTileUrl,
         previewKind: resolved.previewTileUrl ? "raster" : undefined,
@@ -982,6 +1002,41 @@ interface ResolvedCustom {
   /** Raster {z}/{x}/{y} URL we can use as a thumbnail. Unset when the source
    *  is vector pbf or we couldn't derive one. */
   previewTileUrl?: string;
+  /** The `name` the style.json or TileJSON gives itself, if any. */
+  sourceName?: string;
+  /** Sanitised attribution published by the source(s), if any. */
+  sourceAttribution?: string;
+}
+
+/** Attribution strings for each source of a style — inline, or from the
+ *  source's TileJSON. Sources that fail to load are skipped. */
+async function styleSourceAttributions(
+  sources: Record<string, unknown>,
+  mapboxToken?: string,
+): Promise<string[]> {
+  const found = await Promise.all(
+    Object.values(sources).map(async (value) => {
+      const src = value as { url?: unknown; attribution?: unknown };
+      if (typeof src.attribution === "string") return src.attribution;
+      if (typeof src.url !== "string") return "";
+      try {
+        const r = await fetch(normalizeMapboxUrl(src.url, mapboxToken), {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!r.ok) return "";
+        const tj = (await r.json()) as { attribution?: unknown };
+        return typeof tj.attribution === "string" ? tj.attribution : "";
+      } catch {
+        return "";
+      }
+    }),
+  );
+  return found.filter(Boolean);
+}
+
+function jsonName(json: Record<string, unknown>): string | undefined {
+  const name = typeof json.name === "string" ? json.name.trim() : "";
+  return name ? name.slice(0, 80) : undefined;
 }
 
 /** Probe a custom URL and return an AppStyle plus a thumbnail tile URL when
@@ -990,6 +1045,7 @@ async function resolveCustomStyle(
   url: string,
   subdomains?: string[],
   scheme?: TileScheme,
+  accessToken?: string,
 ): Promise<ResolvedCustom> {
   if (isTileUrlTemplate(url)) {
     // Probe at z=1 so `{quadkey}` resolves to a real tile ("0") — Bing-style
@@ -1007,26 +1063,45 @@ async function resolveCustomStyle(
         scheme,
         spec: rasterStyleForTileUrl(url, subdomains, scheme),
         license: "restrictive",
-        attribution: CUSTOM_URL_ATTRIBUTION,
+        ...customSourceInfo(url),
       },
       previewTileUrl: url,
     };
   }
-  const r = await fetch(url);
+  const isMapbox = !!parseMapboxStyleUrl(url);
+  const mapboxToken = mapboxAccessToken({ url, accessToken });
+  const r = await fetch(normalizeMapboxUrl(url, mapboxToken));
+  if (isMapbox && (r.status === 401 || r.status === 403)) {
+    throw new Error(`Mapbox rejected the access token (${r.status})`);
+  }
+  if (isMapbox && r.status === 404) {
+    throw new Error(
+      "Mapbox style not found — check the URL, and that the style is public or the token belongs to its owner",
+    );
+  }
   if (!r.ok) throw new Error(`Fetch failed: ${r.status}`);
   const json = (await r.json()) as Record<string, unknown>;
   // Maplibre style: has version 8 and sources
+  const sourceName = jsonName(json);
   if (json.version === 8 && typeof json.sources === "object") {
+    const sourceAttribution = combineAttributions(
+      await styleSourceAttributions(
+        json.sources as Record<string, unknown>,
+        mapboxToken,
+      ),
+    );
     return {
       style: {
         id: "custom",
-        name: "Custom style",
+        name: sourceName ?? (isMapbox ? "Mapbox style" : "Custom style"),
         desc: url,
         url,
         kind: "vector",
         license: "restrictive",
-        attribution: CUSTOM_URL_ATTRIBUTION,
+        ...customSourceInfo(url, sourceAttribution),
       },
+      sourceName,
+      sourceAttribution,
     };
   }
   // TileJSON: has tiles array (or tilejson key)
@@ -1036,19 +1111,25 @@ async function resolveCustomStyle(
     const tiles = Array.isArray(json.tiles) ? (json.tiles as string[]) : [];
     const maxZoom =
       typeof json.maxzoom === "number" ? (json.maxzoom as number) : undefined;
+    const sourceAttribution =
+      typeof json.attribution === "string"
+        ? combineAttributions([json.attribution])
+        : undefined;
     return {
       style: {
         id: "custom",
-        name: "Custom TileJSON",
+        name: sourceName ?? "Custom TileJSON",
         desc: url,
         url,
         kind,
         maxZoom,
         spec: styleForTileJson(url, kind),
         license: "restrictive",
-        attribution: CUSTOM_URL_ATTRIBUTION,
+        ...customSourceInfo(url, sourceAttribution),
       },
       previewTileUrl: kind === "raster" ? tiles[0] : undefined,
+      sourceName,
+      sourceAttribution,
     };
   }
   throw new Error("Not a valid style or TileJSON");

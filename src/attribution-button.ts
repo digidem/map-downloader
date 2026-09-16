@@ -123,9 +123,9 @@ export class AttributionButton extends LightElement {
             >×</button>
           </div>
           <div class="attrib-popover-name">${s.name}</div>
-          <!-- Attribution is curated HTML from our preset/QMS data (or a plain
-               string for custom URLs) — render it so sources can show
-               their logos/links. -->
+          <!-- Attribution is curated HTML from our preset/QMS data, or source
+               attribution already reduced to text and links by
+               combineAttributions(). -->
           <div class="attrib-popover-box">
             ${unsafeHTML(s.attribution || "No attribution provided.")}
           </div>

@@ -683,7 +683,8 @@ export class DownloadModal extends LightElement {
    *  bold text otherwise. Stops click propagation so opening the link doesn't
    *  also toggle the acknowledgement checkbox. */
   private renderTermsLink(style: AppStyle): TemplateResult {
-    const label = `${style.name}'s terms of use`;
+    const owner = ("provider" in style && style.provider) || style.name;
+    const label = `${owner}'s terms of use`;
     return style.termsUrl
       ? html`<a
           class="dm-licence-terms"

@@ -258,6 +258,125 @@ function appTests(
     expect(centerAfter.lng).not.toBeCloseTo(centerBefore.lng, 1);
   });
 
+  test("accepts each form of Mapbox style share link", async () => {
+    const token = "pk.test-token";
+    const styleBase = "api.mapbox.com/styles/v1/someone/abc123";
+    const requested: string[] = [];
+    await page.route("https://api.mapbox.com/**", (route) => {
+      const url = route.request().url();
+      requested.push(url);
+      if (url.includes("/styles/v1/someone/abc123?")) {
+        return route.fulfill({
+          json: {
+            version: 8,
+            name: "Test Satellite",
+            sources: {
+              composite: { type: "vector", url: "mapbox://test.tiles" },
+            },
+            layers: [{ id: "bg", type: "background" }],
+          },
+        });
+      }
+      if (url.includes("/v4/test.tiles.json")) {
+        return route.fulfill({
+          json: {
+            tilejson: "2.2.0",
+            tiles: [],
+            maxzoom: 14,
+            attribution:
+              '<a href="https://example.com/data" onclick="x()">© Data</a> ' +
+              '<img src="x" onerror="x()"><a href="javascript:x()">© Imagery</a>' +
+              '<script>x()</script> <a href="https://example.com/data">© Data</a>',
+          },
+        });
+      }
+      return route.fulfill({ status: 404 });
+    });
+
+    const cases = [
+      { url: "mapbox://styles/someone/abc123", needsToken: true },
+      {
+        url: `https://${styleBase}/wmts?access_token=${token}`,
+        needsToken: false,
+      },
+      {
+        url: `https://${styleBase}.html?title=view&access_token=${token}&fresh=true#13/33.7/-118.4`,
+        needsToken: false,
+      },
+    ];
+    try {
+      for (const c of cases) {
+        // A persisted Mapbox selection would make MapLibre skip refetching
+        // the source when the same style is picked again.
+        await page.goto(baseUrl);
+        await page.evaluate(() => localStorage.clear());
+        await page.reload();
+        await page.locator("#style-chip").click();
+        await page.locator('.sp-tab[data-tab="custom"]').click();
+        await page.locator(".sp-url").fill(c.url);
+        expect(await page.locator(".sp-token-input").count()).toBe(
+          c.needsToken ? 1 : 0,
+        );
+        if (c.needsToken) await page.locator(".sp-token-input").fill(token);
+        requested.length = 0;
+        await page.locator(".sp-validate-btn").click();
+        await page.waitForFunction(
+          () =>
+            document
+              .querySelector("#style-chip .va-style-name")
+              ?.textContent?.includes("Test Satellite"),
+        );
+        expect(requested).toContain(
+          `https://${styleBase}?access_token=${token}`,
+        );
+        // The picker (for attribution) and MapLibre each resolve the style's
+        // mapbox:// source through the API.
+        await expect
+          .poll(
+            () =>
+              requested.filter(
+                (u) =>
+                  u.includes("/v4/test.tiles.json") &&
+                  u.includes(`access_token=${token}`),
+              ).length,
+          )
+          .toBeGreaterThanOrEqual(2);
+      }
+
+      // The acknowledgement names Mapbox and links to its terms, not the URL.
+      await page.locator("#download-button").click();
+      const terms = page.locator(".dm-licence-terms");
+      await terms.waitFor({ state: "visible" });
+      expect(await terms.textContent()).toBe("Mapbox's terms of use");
+      expect(await terms.getAttribute("href")).toBe(
+        "https://www.mapbox.com/legal/tos",
+      );
+
+      // A reload restores the selection from Recents under the same name.
+      await page.reload();
+      await page.waitForFunction(
+        () =>
+          document
+            .querySelector("#style-chip .va-style-name")
+            ?.textContent === "Test Satellite",
+      );
+
+      // Source attribution is reduced to text and http(s) links, deduplicated.
+      await page.locator(".attrib-btn").click();
+      const box = page.locator(".attrib-popover-box");
+      await box.waitFor({ state: "visible" });
+      expect(
+        await box.evaluate((el) => el.innerHTML.replace(/<!--.*?-->/g, "").trim()),
+      ).toBe(
+        '<a href="https://example.com/data" target="_blank" rel="noopener noreferrer">© Data</a> © Imagery',
+      );
+    } finally {
+      // Later tests would otherwise restore this style and hit the real API.
+      await page.evaluate(() => localStorage.clear());
+      await page.unroute("https://api.mapbox.com/**");
+    }
+  });
+
   const testDownload = opts?.skipDownloadTest ? test.skip : test;
   testDownload("can download mbtiles as smp file", { timeout: 90_000 }, async () => {
     await loadMbtilesFixture(page);

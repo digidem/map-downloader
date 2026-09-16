@@ -10,7 +10,6 @@ import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 
 import {
   PRESET_STYLES,
-  CUSTOM_URL_ATTRIBUTION,
   isTileUrlTemplate,
   rasterStyleForTileUrl,
   type AppStyle,
@@ -19,6 +18,8 @@ import {
 import { BboxMap, type GeoBbox } from "./bbox-map.ts";
 import { BoundsPanel } from "./bounds-panel.ts";
 import { AttributionButton } from "./attribution-button.ts";
+import { combineAttributions } from "./attribution.ts";
+import { mapboxAccessToken } from "./mapbox.ts";
 import { HelpButton } from "./help-button.ts";
 import { StylePicker } from "./style-picker.ts";
 import { DownloadModal, type DownloadController } from "./download-modal.ts";
@@ -33,6 +34,7 @@ import {
 } from "./analytics.ts";
 import {
   loadRecents,
+  customStyleFromRecent,
   loadSelected,
   recentIdForUrl,
   saveSelected,
@@ -106,20 +108,7 @@ function initialStyle(): AppStyle {
   }
   if (ref?.kind === "recent") {
     const recent = loadRecents().find((r) => r.id === ref.id);
-    if (recent) {
-      return {
-        id: "custom",
-        name: recent.name,
-        desc: recent.url,
-        url: recent.url,
-        kind: recent.kind,
-        spec: recent.spec,
-        accessToken: recent.accessToken,
-        maxZoom: recent.maxZoom,
-        license: "restrictive",
-        attribution: CUSTOM_URL_ATTRIBUTION,
-      };
-    }
+    if (recent) return customStyleFromRecent(recent);
   }
   return PRESET_STYLES[0];
 }
@@ -413,9 +402,9 @@ async function loadMbtilesFile(file: File, via: "picker" | "drop") {
     maxZoom:
       typeof metadata.maxzoom === "number" ? metadata.maxzoom : undefined,
     attribution:
-      typeof metadata.attribution === "string" && metadata.attribution
-        ? metadata.attribution
-        : "Local .mbtiles file.",
+      (typeof metadata.attribution === "string" &&
+        combineAttributions([metadata.attribution])) ||
+      "Local .mbtiles file.",
     license: "open",
   };
   track("style_select", {
@@ -474,8 +463,9 @@ function startDownload(
           [channel.workerPort],
         );
       } else {
-        const accessToken =
-          "accessToken" in style ? style.accessToken : undefined;
+        // Other providers' keys are already in the URL; only a Mapbox token
+        // is handed to the downloader, which sends it to api.mapbox.com.
+        const accessToken = mapboxAccessToken(style);
         const message: any = {
           type: "generateSmpFromStyle",
           port: channel.workerPort,
