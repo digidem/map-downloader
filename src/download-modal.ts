@@ -29,6 +29,17 @@ import {
   resolveDataTileUrls,
   sampleAvgTileBytes,
 } from "./tile-sampler.ts";
+import {
+  areaBucket,
+  bboxAreaKm2,
+  durationBucket,
+  regionCell,
+  sanitizeError,
+  sizeBucket,
+  styleProps,
+  tileBucket,
+  track,
+} from "./analytics.ts";
 
 type Status = "idle" | "downloading" | "error" | "success";
 
@@ -216,6 +227,7 @@ export class DownloadModal extends LightElement {
     this.previewContainer.className = "dm-preview-host";
 
     this.isOpen = true;
+    track("Download Opened", styleProps(args.style));
     this.kickoffSample(0);
 
     // Always run the async resolver. It walks style.json → TileJSON, then
@@ -834,7 +846,9 @@ export class DownloadModal extends LightElement {
     const backdrop = document.createElement("div");
     backdrop.className = "dm-huge-backdrop";
     backdrop.addEventListener("click", (e) => {
-      if (e.target === backdrop) this.closeHugeConfirm();
+      if (e.target !== backdrop) return;
+      track("Huge Download Prompt", { outcome: "cancelled" });
+      this.closeHugeConfirm();
     });
 
     const modal = document.createElement("div");
@@ -875,12 +889,16 @@ export class DownloadModal extends LightElement {
     input.addEventListener("input", sync);
     confirmBtn.addEventListener("click", () => {
       if (input.value.trim() !== expected) return;
+      track("Huge Download Prompt", { outcome: "confirmed" });
       this.closeHugeConfirm();
       this.startDownload();
     });
     modal
       .querySelector<HTMLButtonElement>(".dm-huge-cancel")!
-      .addEventListener("click", () => this.closeHugeConfirm());
+      .addEventListener("click", () => {
+        track("Huge Download Prompt", { outcome: "cancelled" });
+        this.closeHugeConfirm();
+      });
 
     backdrop.appendChild(modal);
     document.body.appendChild(backdrop);
@@ -895,6 +913,35 @@ export class DownloadModal extends LightElement {
 
   private startDownload() {
     if (!this.currentStyle || !this.currentGeoBbox) return;
+    const isMbtiles = "isMbtiles" in this.currentStyle;
+    const props = {
+      ...styleProps(this.currentStyle),
+      retry: this.status === "error",
+      // An .mbtiles export converts the whole file, ignoring bbox and zoom.
+      ...(isMbtiles
+        ? {}
+        : {
+            max_zoom: this.maxZoom,
+            area_km2: areaBucket(bboxAreaKm2(this.currentGeoBbox)),
+            region: regionCell(this.currentGeoBbox),
+            tiles: tileBucket(this.tileCount),
+            est_size_mb: sizeBucket(this.tileCount * this.bytesPerTile),
+            size_warning: this.warnLevel ?? "none",
+          }),
+    };
+    const metrics: Record<string, number> = isMbtiles
+      ? {}
+      : {
+          tile_count: this.tileCount,
+          est_size_bytes: Math.round(this.tileCount * this.bytesPerTile),
+          bbox_area_km2:
+            Math.round(bboxAreaKm2(this.currentGeoBbox) * 10) / 10,
+        };
+    track("Download Started", { ...props, ...metrics });
+    const startedAt = Date.now();
+    // Progress/error callbacks can repeat; report the outcome once.
+    let reported = false;
+
     this.status = "downloading";
     this.progress = 0;
     this.errorText = null;
@@ -913,9 +960,28 @@ export class DownloadModal extends LightElement {
           if (done) {
             this.status = "success";
             this.progress = 1;
+            if (!reported) {
+              reported = true;
+              const durationMs = Date.now() - startedAt;
+              track("Download Completed", {
+                ...props,
+                ...metrics,
+                duration_s: durationBucket(durationMs),
+                duration_ms: durationMs,
+              });
+            }
           }
         },
         onError: (msg) => {
+          if (!reported) {
+            reported = true;
+            track("Download Failed", {
+              ...props,
+              ...metrics,
+              error: sanitizeError(msg),
+              progress_pct: Math.round(this.progress * 10) * 10,
+            });
+          }
           this.status = "error";
           this.errorText = msg;
         },

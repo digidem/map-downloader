@@ -36,6 +36,7 @@ import {
   saveRecent,
   type RecentEntry,
 } from "./recents-store.ts";
+import { customUrlType, sanitizeError, track, urlHost } from "./analytics.ts";
 
 /** Zoom used for the card preview tile (city-level detail). */
 const PREVIEW_ZOOM = 12;
@@ -857,6 +858,12 @@ export class StylePicker extends LightElement {
 
       const resolved = await resolveCustomStyle(finalUrl, subdomains, scheme);
       const accessToken = tokenInfo.required ? this.token : undefined;
+      track("Custom URL Validated", {
+        result: "ok",
+        host: urlHost(this.customUrl),
+        type: customUrlType(this.customUrl, !!resolved.style.spec),
+        token_provider: tokenInfo.providerLabel ?? "none",
+      });
 
       this.validateMsg = { ok: true, text: "Validated. Loading…" };
       const styleWithToken: CustomStyle = {
@@ -879,6 +886,13 @@ export class StylePicker extends LightElement {
       this.opts.onSelectStyle(styleWithToken);
       setTimeout(() => this.close(), 400);
     } catch (e) {
+      track("Custom URL Validated", {
+        result: "error",
+        host: urlHost(this.customUrl),
+        type: isTileUrlTemplate(this.customUrl) ? "tile-url" : "unknown",
+        token_provider: tokenInfo.providerLabel ?? "none",
+        error: sanitizeError((e as Error).message ?? "Validation failed"),
+      });
       this.validateMsg = {
         ok: false,
         text: (e as Error).message ?? "Validation failed",
